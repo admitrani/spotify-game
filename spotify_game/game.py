@@ -6,8 +6,9 @@ from typing import Any
 import spotipy
 
 from .config import GAME_HISTORY_PATH, OPTION_COUNT
-from .history import append_game_history
+from .history import append_game_history, get_high_score
 from .playback import (
+    FULL_SNIPPET_WINDOW_ERROR,
     pause_playback,
     play_random_snippet,
     resolve_device,
@@ -41,6 +42,8 @@ def play_game(
 ) -> None:
     if len(library) < OPTION_COUNT:
         raise RuntimeError(f"Need at least {OPTION_COUNT} tracks in your library to play.")
+
+    previous_high_score = get_high_score()
 
     device_id = resolve_device(sp)
     if not device_id:
@@ -104,6 +107,8 @@ def play_game(
                     snippet_seconds=snippet_seconds,
                 )
                 if not played:
+                    if playback_error == FULL_SNIPPET_WINDOW_ERROR:
+                        continue
                     end_message = "Could not start playback on your active Spotify device."
                     if playback_error:
                         end_message = f"{end_message}\nSpotify error: {playback_error}"
@@ -166,6 +171,14 @@ def play_game(
     }
     append_game_history(summary)
 
+    is_new_high_score = score > previous_high_score
+    high_score = max(previous_high_score, score)
+
     print("\nGame Over")
-    print(f"Final score: {score}")
+    if is_new_high_score:
+        print(f"Final score: {score} (HIGH SCORE)")
+        print("New high score!")
+    else:
+        print(f"Final score: {score}")
+    print(f"High score: {high_score}")
     print(f"Run log appended to: {GAME_HISTORY_PATH}")

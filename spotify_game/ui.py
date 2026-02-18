@@ -231,11 +231,6 @@ def timed_choice_prompt(
                         break
                     _ = sys.stdin.read(1)
                 continue
-
-            lowered = char.lower()
-            if lowered.isdigit():
-                typed += lowered
-                render_callback(remaining, typed)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
