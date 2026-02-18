@@ -34,8 +34,15 @@ def play_random_snippet(
     snippet_seconds: int,
 ) -> tuple[bool, str | None]:
     snippet_ms = max(1, snippet_seconds) * 1000
-    duration_ms = max(int(track.get("duration_ms", 0)), snippet_ms)
-    max_start_ms = max(0, duration_ms - snippet_ms)
+    duration_ms = track.get("duration_ms", 0)
+    if not isinstance(duration_ms, int):
+        duration_ms = 0
+
+    if duration_ms < snippet_ms:
+        return False, "Track is shorter than the selected snippet length."
+
+    # Enforce full snippet playback: start point must be <= (duration - snippet).
+    max_start_ms = duration_ms - snippet_ms
     start_position_ms = random.randint(0, max_start_ms) if max_start_ms else 0
 
     last_error: str | None = None
@@ -67,4 +74,3 @@ def pause_playback(sp: spotipy.Spotify, device_id: str | None) -> None:
         sp.pause_playback()
     except SpotifyException:
         pass
-

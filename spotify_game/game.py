@@ -7,8 +7,13 @@ import spotipy
 
 from .config import GAME_HISTORY_PATH, OPTION_COUNT
 from .history import append_game_history
-from .playback import pause_playback, play_random_snippet, resolve_device
+from .playback import (
+    pause_playback,
+    play_random_snippet,
+    resolve_device,
+)
 from .ui import (
+    build_answer_prompt,
     build_option_lines,
     build_round_lines,
     enter_alternate_screen,
@@ -145,7 +150,7 @@ def play_game(
 
     if end_message and last_status != "quit" and last_round_option_blocks:
         print("\n".join(build_round_lines(score=score, remaining_seconds=0, option_blocks=last_round_option_blocks)))
-        print(f"Answer [1-{last_round_option_count}, q to quit] ->")
+        print(build_answer_prompt(option_count=last_round_option_count))
 
     if end_message:
         print(end_message)
@@ -164,4 +169,3 @@ def play_game(
     print("\nGame Over")
     print(f"Final score: {score}")
     print(f"Run log appended to: {GAME_HISTORY_PATH}")
-

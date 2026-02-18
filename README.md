@@ -8,9 +8,12 @@ A modular Python CLI game that uses your Spotify saved tracks for timed song-gue
 - Full saved-library sync with Spotify pagination (50/page, no 50-track cap)
 - Local library cache (`library_data.json`) for fast startup
 - 15-second timed guessing rounds by default
+- Snippet start position is guaranteed to allow a full snippet (never starts in the final snippet window)
 - Clean terminal UI with full wrapped track/artist names
 - Live countdown timer and immediate game-over on timeout
+- Fast answer input: press `1-4` directly (no Enter needed in interactive terminals)
 - Playback pause on game end to avoid songs continuing in Spotify
+- Replay flow after each game with a simple selector (`[1] Yes / [2] No`)
 - Run logging to `game_history.jsonl` for analytics and reproducibility
 
 ## Setup
@@ -69,6 +72,15 @@ python3 main.py --snippet-seconds 15
 python3 main.py --max-rounds 10
 ```
 
+## Controls
+
+- During a round:
+  - Press `1`, `2`, `3`, or `4` to answer
+  - Press `q` to quit
+- After game over:
+  - Press `1` to play again
+  - Press `2` to exit
+
 ## Project Structure
 
 ```text
@@ -90,4 +102,3 @@ main.py              # thin launcher for python3 main.py
 
 - `library_data.json`: normalized local track cache
 - `game_history.jsonl`: one JSON object per game run
-

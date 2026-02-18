@@ -5,6 +5,7 @@ from .env import get_required_env, load_env_file, migrate_legacy_token_cache
 from .game import play_game
 from .library import load_or_sync_library
 from .spotify_client import close_sessions, create_spotify_client
+from .ui import prompt_play_again
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,12 +45,17 @@ def main() -> None:
         print(f"Connected to Spotify account: {account_name}")
 
         library = load_or_sync_library(sp, refresh_library=args.refresh_library)
-        play_game(
-            sp=sp,
-            library=library,
-            snippet_seconds=max(1, args.snippet_seconds),
-            max_rounds=max(0, args.max_rounds),
-        )
+        snippet_seconds = max(1, args.snippet_seconds)
+        max_rounds = max(0, args.max_rounds)
+
+        while True:
+            play_game(
+                sp=sp,
+                library=library,
+                snippet_seconds=snippet_seconds,
+                max_rounds=max_rounds,
+            )
+            if not prompt_play_again():
+                break
     finally:
         close_sessions(sp)
-

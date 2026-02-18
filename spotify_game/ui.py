@@ -16,6 +16,11 @@ except ImportError:
     tty = None
 
 
+def build_answer_prompt(option_count: int, answer_buffer: str = "") -> str:
+    buttons = " ".join(f"[{i}]" for i in range(1, option_count + 1))
+    return f"Choose {buttons} | [q] quit -> {answer_buffer}"
+
+
 def get_terminal_width() -> int:
     return min(MAX_TERMINAL_WIDTH, shutil.get_terminal_size(fallback=(MAX_TERMINAL_WIDTH, 24)).columns)
 
@@ -106,7 +111,7 @@ def render_round_screen(
 
     clear_terminal()
     print("\n".join(lines))
-    sys.stdout.write(f"Answer [1-{option_count}, q to quit] -> {answer_buffer}")
+    sys.stdout.write(build_answer_prompt(option_count=option_count, answer_buffer=answer_buffer))
     sys.stdout.flush()
 
 
@@ -120,7 +125,7 @@ def update_round_timer(
         return
 
     up_lines = max(1, rendered_line_count - 2)
-    prompt = f"Answer [1-{option_count}, q to quit] -> {answer_buffer}"
+    prompt = build_answer_prompt(option_count=option_count, answer_buffer=answer_buffer)
     sys.stdout.write(f"\033[{up_lines}A")
     sys.stdout.write("\r\033[2K")
     sys.stdout.write(f"Time left: {remaining_seconds:02d}s")
@@ -152,7 +157,7 @@ def timed_choice_prompt(
     if not sys.stdin.isatty() or termios is None or tty is None:
         render_callback(timeout_seconds, "")
         print()
-        choice, status = parse_choice(input(f"Answer [1-{option_count}, q to quit] -> ").strip().lower(), option_count)
+        choice, status = parse_choice(input(build_answer_prompt(option_count)).strip().lower(), option_count)
         return choice, status
 
     fd = sys.stdin.fileno()
@@ -180,7 +185,7 @@ def timed_choice_prompt(
             except (OSError, ValueError):
                 print()
                 choice, status = parse_choice(
-                    input(f"Answer [1-{option_count}, q to quit] -> ").strip().lower(),
+                    input(build_answer_prompt(option_count)).strip().lower(),
                     option_count,
                 )
                 return choice, status
@@ -203,6 +208,19 @@ def timed_choice_prompt(
                 render_callback(remaining, typed)
                 continue
 
+            if char.lower() == "q":
+                print()
+                return None, "quit"
+
+            if char.isdigit():
+                choice = int(char)
+                if 1 <= choice <= option_count:
+                    print()
+                    return choice - 1, "answered"
+                typed += char
+                render_callback(remaining, typed)
+                continue
+
             if char == "\x1b":
                 while True:
                     try:
@@ -215,9 +233,32 @@ def timed_choice_prompt(
                 continue
 
             lowered = char.lower()
-            if lowered.isdigit() or lowered == "q":
+            if lowered.isdigit():
                 typed += lowered
                 render_callback(remaining, typed)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
+
+def prompt_play_again() -> bool:
+    prompt = "Play again? [1] Yes  [2] No -> "
+    if not sys.stdin.isatty() or termios is None or tty is None:
+        answer = input(prompt).strip().lower()
+        return answer in {"", "1", "y", "yes"}
+
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    try:
+        tty.setcbreak(fd)
+        while True:
+            char = sys.stdin.read(1).lower()
+            if char in {"\n", "\r", "1", "y"}:
+                print()
+                return True
+            if char in {"2", "n", "q"}:
+                print()
+                return False
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
