@@ -452,45 +452,71 @@ def parse_choice(raw_value: str, option_count: int) -> tuple[int | None, str]:
     return None, "invalid"
 
 
-def timed_choice_prompt(option_count: int, timeout_seconds: int) -> tuple[int | None, str]:
-    prompt = f"Answer [1-{option_count}, q to quit]"
+def timed_choice_prompt(
+    option_count: int,
+    timeout_seconds: int,
+    render_callback,
+) -> tuple[int | None, str]:
     timeout_seconds = max(1, timeout_seconds)
 
-    if not sys.stdin.isatty():
-        choice, status = parse_choice(input(f"{prompt} -> ").strip().lower(), option_count)
+    if not sys.stdin.isatty() or termios is None or tty is None:
+        render_callback(timeout_seconds, "")
+        print()
+        choice, status = parse_choice(input(f"Answer [1-{option_count}, q to quit] -> ").strip().lower(), option_count)
         return choice, status
 
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    typed = ""
     deadline = time.monotonic() + timeout_seconds
-    last_remaining: int | None = None
+    last_remaining = -1
 
-    while True:
-        remaining = max(0, int(math.ceil(deadline - time.monotonic())))
-        if remaining != last_remaining:
-            sys.stdout.write(f"\r{prompt} | {remaining:02d}s left -> ")
-            sys.stdout.flush()
-            last_remaining = remaining
+    try:
+        tty.setcbreak(fd)
 
-        if remaining <= 0:
-            sys.stdout.write("\n")
-            return None, "timeout"
+        while True:
+            remaining = max(0, int(math.ceil(deadline - time.monotonic())))
+            if remaining != last_remaining:
+                render_callback(remaining, typed)
+                last_remaining = remaining
 
-        wait_seconds = min(0.2, max(0.0, deadline - time.monotonic()))
-        try:
-            ready, _, _ = select.select([sys.stdin], [], [], wait_seconds)
-        except (OSError, ValueError):
-            choice, status = parse_choice(input(f"\n{prompt} -> ").strip().lower(), option_count)
-            return choice, status
+            if remaining <= 0:
+                print()
+                return None, "timeout"
 
-        if not ready:
-            continue
+            wait_seconds = min(0.1, max(0.0, deadline - time.monotonic()))
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], wait_seconds)
+            except (OSError, ValueError):
+                print()
+                choice, status = parse_choice(input(f"Answer [1-{option_count}, q to quit] -> ").strip().lower(), option_count)
+                return choice, status
 
-        raw_value = sys.stdin.readline().strip().lower()
-        sys.stdout.write("\n")
-        choice, status = parse_choice(raw_value, option_count)
-        if status == "invalid":
-            print("Invalid choice. Enter a valid option number.")
-            continue
-        return choice, status
+            if not ready:
+                continue
+
+            char = sys.stdin.read(1)
+            if char in ("\n", "\r"):
+                print()
+                choice, status = parse_choice(typed.strip().lower(), option_count)
+                if status == "invalid":
+                    print("Invalid choice. Enter a valid option number.")
+                    time.sleep(0.8)
+                    typed = ""
+                    last_remaining = -1
+                    continue
+                return choice, status
+
+            if char in ("\x7f", "\b"):
+                typed = typed[:-1]
+                render_callback(remaining, typed)
+                continue
+
+            if char.isprintable():
+                typed += char
+                render_callback(remaining, typed)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
 
 def append_game_history(summary: dict[str, Any]) -> None:
@@ -546,7 +572,22 @@ def play_game(
             if show_artwork and hydrate_missing_artwork(sp, options):
                 library_updated = True
 
-            print_round_ui(score=score, options=options, snippet_seconds=snippet_seconds, show_artwork=show_artwork)
+            terminal_width = min(110, shutil.get_terminal_size(fallback=(110, 24)).columns)
+            option_blocks = [
+                build_option_lines(index=i, track=track, show_artwork=show_artwork, width=terminal_width)
+                for i, track in enumerate(options, start=1)
+            ]
+
+            def render_callback(remaining_seconds: int, answer_buffer: str) -> None:
+                render_round_screen(
+                    score=score,
+                    remaining_seconds=remaining_seconds,
+                    option_blocks=option_blocks,
+                    option_count=len(options),
+                    answer_buffer=answer_buffer,
+                )
+
+            render_callback(snippet_seconds, "")
 
             played, playback_error = play_random_snippet(
                 sp=sp,
@@ -561,7 +602,11 @@ def play_game(
                 break
 
             attempts += 1
-            user_choice, status = timed_choice_prompt(len(options), timeout_seconds=snippet_seconds)
+            user_choice, status = timed_choice_prompt(
+                len(options),
+                timeout_seconds=snippet_seconds,
+                render_callback=render_callback,
+            )
             pause_playback(sp, device_id)
 
             if status == "quit":
