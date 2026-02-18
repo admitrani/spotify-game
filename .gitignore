@@ -17,3 +17,6 @@ __pycache__/
 .spotifycache
 library_data.json
 game_history.jsonl
+
+# Local deep-dive notes (not committed)
+.block_by_block_code_guide.md
