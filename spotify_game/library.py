@@ -1,3 +1,5 @@
+"""Library ingestion, normalization, caching, and refresh logic."""
+
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -8,13 +10,16 @@ from .config import LIBRARY_CACHE_PATH, SAVED_TRACKS_PAGE_SIZE
 
 
 def normalize_track(raw_track: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Normalize a raw Spotify track payload into the app's track schema."""
     if not isinstance(raw_track, dict):
         return None
 
     uri = raw_track.get("uri")
+    # URI is the stable identifier; skip tracks without one.
     if not uri:
         return None
 
+    # Normalize artist payloads from either object-list or string-list forms.
     raw_artists = raw_track.get("artists", [])
     artists: list[str] = []
     if isinstance(raw_artists, list):
@@ -25,6 +30,7 @@ def normalize_track(raw_track: dict[str, Any] | None) -> dict[str, Any] | None:
             artists = [artist for artist in artists if artist]
 
     if not artists:
+        # Keep downstream rendering/scoring simple by guaranteeing at least one value.
         artists = ["Unknown Artist"]
 
     duration_ms = raw_track.get("duration_ms", 0)
@@ -40,10 +46,12 @@ def normalize_track(raw_track: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def fetch_library_from_spotify(sp: spotipy.Spotify) -> list[dict[str, Any]]:
+    """Fetch all saved tracks from Spotify using paginated requests."""
     tracks: list[dict[str, Any]] = []
     offset = 0
 
     while True:
+        # Spotify caps saved-track page size, so fetch until an empty page.
         page = sp.current_user_saved_tracks(limit=SAVED_TRACKS_PAGE_SIZE, offset=offset)
         items = page.get("items", [])
         if not items:
@@ -59,6 +67,7 @@ def fetch_library_from_spotify(sp: spotipy.Spotify) -> list[dict[str, Any]]:
 
     print()
 
+    # De-duplicate by URI to keep one canonical track record per song.
     seen_uris: set[str] = set()
     deduplicated: list[dict[str, Any]] = []
     for track in tracks:
@@ -72,6 +81,7 @@ def fetch_library_from_spotify(sp: spotipy.Spotify) -> list[dict[str, Any]]:
 
 
 def load_library_cache() -> list[dict[str, Any]]:
+    """Load cached library data from disk, tolerating legacy shapes."""
     if not LIBRARY_CACHE_PATH.exists():
         return []
 
@@ -79,8 +89,10 @@ def load_library_cache() -> list[dict[str, Any]]:
         with LIBRARY_CACHE_PATH.open("r", encoding="utf-8") as file:
             payload = json.load(file)
     except (json.JSONDecodeError, OSError):
+        # Fall back to empty cache on unreadable/corrupt files.
         return []
 
+    # Support both current object payload and legacy list-only payload.
     if isinstance(payload, dict):
         raw_tracks = payload.get("tracks", [])
     elif isinstance(payload, list):
@@ -90,6 +102,7 @@ def load_library_cache() -> list[dict[str, Any]]:
 
     tracks: list[dict[str, Any]] = []
     for entry in raw_tracks:
+        # Some legacy caches stored each row under {"track": ...}.
         if isinstance(entry, dict) and "track" in entry:
             track = normalize_track(entry.get("track"))
         else:
@@ -102,6 +115,7 @@ def load_library_cache() -> list[dict[str, Any]]:
 
 
 def save_library_cache(tracks: list[dict[str, Any]]) -> None:
+    """Persist normalized track list and sync metadata to disk."""
     payload = {
         "synced_at_utc": datetime.now(timezone.utc).isoformat(),
         "track_count": len(tracks),
@@ -113,15 +127,16 @@ def save_library_cache(tracks: list[dict[str, Any]]) -> None:
 
 
 def load_or_sync_library(sp: spotipy.Spotify, refresh_library: bool) -> list[dict[str, Any]]:
+    """Load cache when available, or sync from Spotify when needed."""
     if not refresh_library:
         cached_tracks = load_library_cache()
         if cached_tracks:
             print(f"Loaded {len(cached_tracks)} tracks from cache. Use --refresh-library to resync.")
             return cached_tracks
 
+    # Forced refresh or empty cache path.
     print("Refreshing saved tracks from Spotify...")
     tracks = fetch_library_from_spotify(sp)
     save_library_cache(tracks)
     print(f"Saved {len(tracks)} tracks to {LIBRARY_CACHE_PATH}.")
     return tracks
-

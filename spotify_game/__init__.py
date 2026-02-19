@@ -1,2 +1,0 @@
-"""Spotify guessing game package."""
-

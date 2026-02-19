@@ -1,3 +1,5 @@
+"""Terminal UI rendering and timed input handling."""
+
 import math
 import select
 import shutil
@@ -9,23 +11,28 @@ from collections.abc import Callable
 from .config import MAX_TERMINAL_WIDTH
 
 try:
+    # Raw terminal input helpers (POSIX).
     import termios
     import tty
 except ImportError:
+    # Fallback path for environments without termios/tty support.
     termios = None
     tty = None
 
 
 def build_answer_prompt(option_count: int, answer_buffer: str = "") -> str:
+    """Build the standard answer prompt line."""
     buttons = " ".join(f"[{i}]" for i in range(1, option_count + 1))
     return f"Choose {buttons} | [q] quit -> {answer_buffer}"
 
 
 def get_terminal_width() -> int:
+    """Get terminal width with a readability cap and safe fallback."""
     return min(MAX_TERMINAL_WIDTH, shutil.get_terminal_size(fallback=(MAX_TERMINAL_WIDTH, 24)).columns)
 
 
 def clear_terminal() -> None:
+    """Clear the terminal screen when stdout is an interactive TTY."""
     if not sys.stdout.isatty():
         return
 
@@ -34,6 +41,7 @@ def clear_terminal() -> None:
 
 
 def enter_alternate_screen() -> bool:
+    """Enter alternate terminal buffer for full-screen game rendering."""
     if not sys.stdout.isatty():
         return False
 
@@ -43,6 +51,7 @@ def enter_alternate_screen() -> bool:
 
 
 def leave_alternate_screen() -> None:
+    """Leave alternate terminal buffer and restore normal shell screen."""
     if not sys.stdout.isatty():
         return
 
@@ -51,10 +60,12 @@ def leave_alternate_screen() -> None:
 
 
 def build_option_lines(index: int, track: dict, width: int) -> list[str]:
+    """Render one answer option as wrapped title/artist lines."""
     lines: list[str] = []
     title_width = max(30, width - 8)
     artist_width = max(30, width - 12)
 
+    # Wrap long titles without breaking words so output stays readable.
     title_lines = textwrap.wrap(
         track["name"],
         width=title_width,
@@ -65,6 +76,7 @@ def build_option_lines(index: int, track: dict, width: int) -> list[str]:
     for continuation in title_lines[1:]:
         lines.append(f"    {continuation}")
 
+    # Artists can be long too; wrap independently from title width.
     artists_text = ", ".join(track["artists"])
     artist_lines = textwrap.wrap(
         artists_text,
@@ -83,6 +95,7 @@ def build_round_lines(
     remaining_seconds: int,
     option_blocks: list[list[str]],
 ) -> list[str]:
+    """Build all lines shown for a round: header, options, and divider."""
     width = get_terminal_width()
     divider = "=" * width
     lines: list[str] = [
@@ -107,6 +120,7 @@ def render_round_screen(
     option_count: int,
     answer_buffer: str = "",
 ) -> None:
+    """Render the full round screen and prompt."""
     lines = build_round_lines(score=score, remaining_seconds=remaining_seconds, option_blocks=option_blocks)
 
     clear_terminal()
@@ -116,26 +130,28 @@ def render_round_screen(
 
 
 def update_round_timer(
-    rendered_line_count: int,
+    score: int,
+    option_blocks: list[list[str]],
     option_count: int,
     remaining_seconds: int,
     answer_buffer: str,
 ) -> None:
+    """Refresh countdown display by re-rendering the current round state."""
     if not sys.stdout.isatty():
         return
 
-    up_lines = max(1, rendered_line_count - 2)
-    prompt = build_answer_prompt(option_count=option_count, answer_buffer=answer_buffer)
-    sys.stdout.write(f"\033[{up_lines}A")
-    sys.stdout.write("\r\033[2K")
-    sys.stdout.write(f"Time left: {remaining_seconds:02d}s")
-    sys.stdout.write(f"\033[{up_lines}B")
-    sys.stdout.write("\r\033[2K")
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
+    # Full redraw is robust across wrapped lines and variable terminal sizes.
+    render_round_screen(
+        score=score,
+        remaining_seconds=remaining_seconds,
+        option_blocks=option_blocks,
+        option_count=option_count,
+        answer_buffer=answer_buffer,
+    )
 
 
 def parse_choice(raw_value: str, option_count: int) -> tuple[int | None, str]:
+    """Parse user input into (choice_index, status)."""
     if raw_value in {"q", "quit", "exit"}:
         return None, "quit"
 
@@ -152,8 +168,10 @@ def timed_choice_prompt(
     timeout_seconds: int,
     render_callback: Callable[[int, str], None],
 ) -> tuple[int | None, str]:
+    """Collect a timed answer using raw key input when available."""
     timeout_seconds = max(1, timeout_seconds)
 
+    # Fallback for non-interactive environments.
     if not sys.stdin.isatty() or termios is None or tty is None:
         render_callback(timeout_seconds, "")
         print()
@@ -167,9 +185,11 @@ def timed_choice_prompt(
     last_remaining = -1
 
     try:
+        # cbreak mode reads single characters without waiting for Enter.
         tty.setcbreak(fd)
 
         while True:
+            # Recompute remaining time every loop iteration.
             remaining = max(0, int(math.ceil(deadline - time.monotonic())))
             if remaining != last_remaining:
                 render_callback(remaining, typed)
@@ -179,6 +199,7 @@ def timed_choice_prompt(
                 print()
                 return None, "timeout"
 
+            # Poll stdin in short intervals to keep countdown responsive.
             wait_seconds = min(0.1, max(0.0, deadline - time.monotonic()))
             try:
                 ready, _, _ = select.select([sys.stdin], [], [], wait_seconds)
@@ -195,6 +216,7 @@ def timed_choice_prompt(
 
             char = sys.stdin.read(1)
             if char in ("\n", "\r"):
+                # Enter submits typed buffer; invalid values restart entry.
                 print()
                 choice, status = parse_choice(typed.strip().lower(), option_count)
                 if status == "invalid":
@@ -213,6 +235,7 @@ def timed_choice_prompt(
                 return None, "quit"
 
             if char.isdigit():
+                # Direct single-digit answer path for fast gameplay.
                 choice = int(char)
                 if 1 <= choice <= option_count:
                     print()
@@ -222,6 +245,7 @@ def timed_choice_prompt(
                 continue
 
             if char == "\x1b":
+                # Drain escape sequence bytes from arrow/function keys.
                 while True:
                     try:
                         ready_more, _, _ = select.select([sys.stdin], [], [], 0.001)
@@ -232,10 +256,12 @@ def timed_choice_prompt(
                     _ = sys.stdin.read(1)
                 continue
     finally:
+        # Always restore terminal mode before returning.
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
 
 def prompt_play_again() -> bool:
+    """Prompt whether the user wants another game run."""
     prompt = "Play again? [1] Yes  [2] No -> "
     if not sys.stdin.isatty() or termios is None or tty is None:
         answer = input(prompt).strip().lower()
@@ -246,6 +272,7 @@ def prompt_play_again() -> bool:
     sys.stdout.write(prompt)
     sys.stdout.flush()
     try:
+        # Reuse cbreak style for one-key replay selection.
         tty.setcbreak(fd)
         while True:
             char = sys.stdin.read(1).lower()

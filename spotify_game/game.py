@@ -1,3 +1,5 @@
+"""Core game loop: round orchestration, scoring, and run summaries."""
+
 import random
 import time
 from datetime import datetime, timezone
@@ -27,6 +29,8 @@ from .ui import (
 
 
 def build_options(correct_track: dict[str, Any], library: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build one shuffled answer set with 1 correct and N-1 alternatives."""
+    # Exclude the correct track from distractor candidates.
     alternatives = [track for track in library if track["uri"] != correct_track["uri"]]
     sampled = random.sample(alternatives, OPTION_COUNT - 1)
     options = sampled + [correct_track]
@@ -40,9 +44,11 @@ def play_game(
     snippet_seconds: int,
     max_rounds: int,
 ) -> None:
+    """Run a full game session until loss, quit, or round limit."""
     if len(library) < OPTION_COUNT:
         raise RuntimeError(f"Need at least {OPTION_COUNT} tracks in your library to play.")
 
+    # Snapshot current high score before this run starts.
     previous_high_score = get_high_score()
 
     device_id = resolve_device(sp)
@@ -61,17 +67,20 @@ def play_game(
     try:
         try:
             while True:
+                # Stop early when caller requested a max round count.
                 if max_rounds and attempts >= max_rounds:
                     end_message = "Reached round limit."
                     last_status = "limit"
                     break
 
+                # Re-resolve device each round to tolerate device changes.
                 device_id = resolve_device(sp, preferred_device_id=device_id)
                 if not device_id:
                     end_message = "No available playback device found."
                     last_status = "error"
                     break
 
+                # Build round candidates and pre-render the current screen.
                 current_track = random.choice(library)
                 options = build_options(current_track, library)
                 terminal_width = get_terminal_width()
@@ -90,16 +99,17 @@ def play_game(
                     answer_buffer="",
                 )
 
-                rendered_line_count = 5 + sum(len(block) + 1 for block in option_blocks)
-
+                # UI callback used by the timed prompt to refresh countdown.
                 def render_callback(remaining_seconds: int, answer_buffer: str) -> None:
                     update_round_timer(
-                        rendered_line_count=rendered_line_count,
+                        score=score,
+                        option_blocks=option_blocks,
                         option_count=len(options),
                         remaining_seconds=remaining_seconds,
                         answer_buffer=answer_buffer,
                     )
 
+                # Start snippet playback and validate playback viability.
                 played, playback_error = play_random_snippet(
                     sp=sp,
                     track=current_track,
@@ -115,12 +125,14 @@ def play_game(
                     last_status = "error"
                     break
 
+                # Count this as an attempted round once playback starts successfully.
                 attempts += 1
                 user_choice, status = timed_choice_prompt(
                     len(options),
                     timeout_seconds=snippet_seconds,
                     render_callback=render_callback,
                 )
+                # Stop audio before evaluating result.
                 pause_playback(sp, device_id)
 
                 if status == "quit":
@@ -140,6 +152,7 @@ def play_game(
 
                 selected_track = options[user_choice]
                 if selected_track["uri"] == current_track["uri"]:
+                    # Correct answer continues the run.
                     score += 1
                     continue
 
@@ -148,11 +161,14 @@ def play_game(
                 last_status = "incorrect"
                 break
         finally:
+            # Always try to pause playback before leaving the round loop.
             pause_playback(sp, device_id)
     finally:
+        # Always restore terminal screen mode before printing final summary.
         if alternate_screen_enabled:
             leave_alternate_screen()
 
+    # Re-print the final option screen when game ended by timeout/incorrect/error.
     if end_message and last_status != "quit" and last_round_option_blocks:
         print("\n".join(build_round_lines(score=score, remaining_seconds=0, option_blocks=last_round_option_blocks)))
         print(build_answer_prompt(option_count=last_round_option_count))
@@ -160,6 +176,7 @@ def play_game(
     if end_message:
         print(end_message)
 
+    # Persist one run summary row for future analysis/high-score lookups.
     summary = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "attempts": attempts,
@@ -171,6 +188,7 @@ def play_game(
     }
     append_game_history(summary)
 
+    # Compute high-score banner state for final output.
     is_new_high_score = score > previous_high_score
     high_score = max(previous_high_score, score)
 
